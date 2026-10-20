@@ -85,8 +85,3 @@ def _replace_last_line(
 async def save_txt(filename: str, new_caption: tuple[float, str]) -> None:
     async with aiofiles.open(filename, "a", encoding="utf-8") as stream:
         await stream.write(caption_line(new_caption))
-
-
-async def close_file() -> None:
-    # Each write owns its handle; there is no persistent second handle to close.
-    return

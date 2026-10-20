@@ -15,9 +15,6 @@ class Deduplicator:
             None, self.normalize_sentence(first), self.normalize_sentence(second)
         ).ratio()
 
-    def is_substantial_sentence(self, sentence: str) -> bool:
-        return any(character.isalnum() for character in sentence)
-
     def is_better_version(self, new_sentence: str, old_sentence: str) -> bool:
         new = new_sentence.strip()
         old = old_sentence.strip()

@@ -15,16 +15,21 @@ from function.capture import CaptionSession
 
 class DashboardTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.launcher = patch("main.ensure_live_captions", return_value=None)
+        self.launcher.start()
+        self.addCleanup(self.launcher.stop)
         self.loop = asyncio.new_event_loop()
         self.root = tk.Tk()
         self.root.withdraw()
         self.app = Dashboard(self.root, self.loop)
         self.root.update_idletasks()
+        self.pump(lambda: self.app.startup_task is None)
 
     def tearDown(self) -> None:
         for task in asyncio.all_tasks(self.loop):
             task.cancel()
         self.loop.run_until_complete(asyncio.sleep(0))
+        self.loop.run_until_complete(self.loop.shutdown_default_executor())
         try:
             if not self.app.closed and self.app.poll_id is not None:
                 self.root.after_cancel(self.app.poll_id)
@@ -59,6 +64,27 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.app.start_btn.bind("<B1-Motion>"), "")
         self.assertEqual(self.app.stop_btn.bind("<B1-Motion>"), "")
         self.assertEqual(self.root.bind("<B1-Motion>"), "")
+
+    def test_startup_failure_is_visible_and_allows_manual_retry(self) -> None:
+        with patch("main.ensure_live_captions", side_effect=RuntimeError("not ready")), patch(
+            "main.messagebox.showerror"
+        ) as error:
+            self.app.startup_task = self.loop.create_task(self.app.initialize_captions())
+            self.pump(lambda: self.app.startup_task is None)
+            error.assert_called_once()
+            self.assertEqual(str(self.app.start_btn["state"]), tk.NORMAL)
+            self.assertIn("手动", self.app.status["text"])
+
+    def test_cannot_record_while_startup_is_pending(self) -> None:
+        async def initializing():
+            await asyncio.sleep(0.05)
+        self.app.startup_task = self.loop.create_task(initializing())
+        with patch("main.choose_save_dir") as choose:
+            self.app.start_capture()
+            choose.assert_not_called()
+        self.app.request_close()
+        self.pump(lambda: self.app.closed)
+        self.assertTrue(self.app.startup_task.done())
 
     def test_capture_failure_is_visible_and_can_retry(self) -> None:
         async def failing_hook(filename, event):

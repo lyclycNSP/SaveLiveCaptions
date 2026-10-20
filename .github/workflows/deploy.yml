@@ -1,92 +1,68 @@
-name: Build, Package, and Release
+name: Build and Release
 permissions:
-  contents: write  
+  contents: write
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
-    tags: [ 'v*.*.*' ]  
+    branches: [main]
+    tags: ['v*.*.*']
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   build:
-    runs-on: windows-latest  
-
+    runs-on: windows-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller flake8 mypy types-aiofiles
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller  flake8 mypy types-aiofiles
+      - name: Check source and run tests
+        run: |
+          python -m flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m mypy src/ --explicit-package-bases --ignore-missing-imports
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    - name: Lint with flake8 and mypy
-      run: |
-        echo "Running flake8..."
-        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics --ignore=F824
-        echo "Running mypy..."
-        mypy src/ --explicit-package-bases --ignore-missing-imports 
+      - name: Build portable executable
+        shell: pwsh
+        run: ./scripts/build.ps1
 
-    - name: Build exe
-      run: |
-        # Onefile
-        pyinstaller --clean --onefile --windowed --icon=assets/SaveLC.ico --name SaveLiveCaptions_SingleFile src/main.py
+      - name: Calculate SHA-256
+        shell: pwsh
+        run: |
+          $digest = (Get-FileHash -LiteralPath dist/SaveLiveCaptions.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  SaveLiveCaptions.exe" | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
 
-        # Onedir with Live Captions auto start
-        pyinstaller --clean --onedir --windowed --paths src --add-data "src;src" --icon=assets/SaveLC.ico --name SaveLiveCaptions_LCautostart_Folder SaveLiveCaptionsWithLC.py
-        
-#         Onedir
-#        pyinstaller --clean --onedir --windowed --icon=assets/SaveLC.ico --name SaveLiveCaptions_Folder src/main.py  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SaveLiveCaptions
+          path: |
+            dist/SaveLiveCaptions.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 3
 
-    - name: Run regression tests
-      run: python -m unittest discover -s tests -v
-
-    - name: Package autostart folder
-      shell: pwsh
-      run: Compress-Archive -Path dist/SaveLiveCaptions_LCautostart_Folder -DestinationPath dist/SaveLiveCaptions_LCautostart_Folder.zip
-        
-    - name: Upload to Artifacts (for quick testing)
-      uses: actions/upload-artifact@v4
-      with:
-        name: SaveLiveCaptions_Builds
-        path: |
-          dist/SaveLiveCaptions_SingleFile.exe
-          dist/SaveLiveCaptions_LCautostart_Folder/
-        retention-days: 3  
-    
-    - name: Compile Inno Setup Script
-      shell: pwsh
-      run: |
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-
-    - name: Upload Setup to Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: SaveLiveCaptions_Setup
-        path: installer_output/SaveLiveCaptions_Setup.exe
-        retention-days: 3
-    
-    - name: Create Release and Upload exe (only on tags)
-      if: startsWith(github.ref, 'refs/tags/')  
-      uses: softprops/action-gh-release@v2  
-      with:
-        files: |
-          dist/SaveLiveCaptions_SingleFile.exe
-          dist/SaveLiveCaptions_LCautostart_Folder.zip
-          installer_output/SaveLiveCaptions_Setup.exe
-#          dist/SaveLiveCaptions_Folder/
-        tag_name: ${{ github.ref_name }}  
-        name: Release ${{ github.ref_name }}
-        body_path: docs/releases/${{ github.ref_name }}.md
-        fail_on_unmatched_files: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SaveLiveCaptions.exe
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          name: Save Live Captions ${{ github.ref_name }}
+          body: |
+            单文件便携版：下载 SaveLiveCaptions.exe 后直接运行，无需安装 Python 或安装程序。
+            启动时自动检测并打开 Windows 实时字幕。使用说明见仓库中文 README。
+          generate_release_notes: true
+          draft: false
+          prerelease: false

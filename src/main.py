@@ -1,11 +1,13 @@
 """Taskbar dashboard; Tk and asyncio share only the UI thread."""
 import asyncio
 from pathlib import Path
+import sys
 import tkinter as tk
 from tkinter import messagebox
 
 from function.save import choose_save_dir
 from function.texthook import hook
+from function.livecaptions import ensure_live_captions
 
 BACKGROUND = "#F5F7FB"
 INK = "#18243B"
@@ -19,14 +21,18 @@ class Dashboard:
         self.loop = loop
         self.exit_event = asyncio.Event()
         self.hook_task: asyncio.Task[bool] | None = None
+        self.startup_task: asyncio.Task[None] | None = None
         self.close_task: asyncio.Task[None] | None = None
         self.closing = False
         self.stopping = False
         self.dialog_open = False
         self.closed = False
-        self.filename: str | None = None
         self.poll_id: str | None = None
         window.title("Save Live Captions")
+        resources = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+        icon = resources / "assets" / "SaveLC.ico"
+        if icon.is_file():
+            window.iconbitmap(default=str(icon))
         # A decorated root has the native title bar and a taskbar entry.
         window.attributes("-topmost", True)
         window.configure(bg="#DCE2EE")
@@ -40,7 +46,7 @@ class Dashboard:
         )
         self.title.pack(fill="x")
         self.status = tk.Label(
-            self.panel, text="● 准备就绪", bg=BACKGROUND, fg=MUTED,
+            self.panel, text="● 正在打开系统实时字幕…", bg=BACKGROUND, fg=MUTED,
             font=("Microsoft YaHei UI", 9), anchor="w",
         )
         self.status.pack(fill="x", pady=(6, 10))
@@ -52,6 +58,7 @@ class Dashboard:
             bg=BLUE, fg="white", activebackground="#244BC4", activeforeground="white",
             disabledforeground="#BFCDF8", relief="flat", bd=0,
             font=("Microsoft YaHei UI", 10, "bold"), cursor="hand2", pady=8,
+            state=tk.DISABLED,
         )
         self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.stop_btn = tk.Button(
@@ -72,6 +79,22 @@ class Dashboard:
         window.minsize(width, height)
         window.geometry(f"{width}x{height}+32+64")
         self.poll_id = window.after(10, self.poll_loop)
+        self.startup_task = loop.create_task(self.initialize_captions())
+
+    async def initialize_captions(self) -> None:
+        try:
+            await asyncio.to_thread(ensure_live_captions)
+        except Exception as error:
+            if not self.closing:
+                self.status.configure(text="● 请手动打开系统实时字幕", fg="#B44444")
+                self.show_error("实时字幕未就绪", str(error))
+        else:
+            if not self.closing:
+                self.status.configure(text="● 准备就绪", fg=MUTED)
+        finally:
+            self.startup_task = None
+            if not self.closing:
+                self.start_btn.configure(state=tk.NORMAL)
 
     def show_error(self, title: str, detail: str) -> None:
         self.dialog_open = True
@@ -81,7 +104,8 @@ class Dashboard:
             self.dialog_open = False
 
     def start_capture(self) -> None:
-        if self.closing or self.dialog_open or self.hook_task is not None:
+        if (self.closing or self.dialog_open or self.startup_task is not None
+                or self.hook_task is not None):
             return
         self.start_btn.configure(state=tk.DISABLED)
         self.dialog_open = True
@@ -93,7 +117,6 @@ class Dashboard:
             return
         finally:
             self.dialog_open = False
-        self.filename = filename
         self.exit_event.clear()
         self.stopping = False
         self.stop_btn.configure(state=tk.NORMAL)
@@ -153,6 +176,8 @@ class Dashboard:
         self.close_task = self.loop.create_task(self.close(self.hook_task))
 
     async def close(self, capture_task: asyncio.Task[bool] | None) -> None:
+        if self.startup_task is not None:
+            await self.startup_task
         if capture_task is not None:
             succeeded = await capture_task
             if not succeeded:

@@ -6,7 +6,6 @@ import uiautomation as auto
 
 from .capture import CaptionSession
 from .baseline import StartupBaseline
-from .sentences import is_incomplete_sentence, split_into_sentences
 
 
 class CaptionReader:
@@ -41,15 +40,6 @@ class CaptionReader:
         if self.context is not None:
             self.context.Uninitialize()
             self.context = None
-
-
-def lc_detect() -> bool:
-    """Detect the window, even when its text area is still initializing."""
-    with auto.UIAutomationInitializerInThread():
-        window = auto.GetRootControl().Control(
-            searchDepth=1, ClassName="LiveCaptionsDesktopWindow"
-        )
-        return bool(window.Exists(0.2))
 
 
 async def hook(filename: str, exit_event: asyncio.Event) -> None:

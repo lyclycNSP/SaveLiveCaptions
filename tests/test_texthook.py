@@ -4,10 +4,10 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from function.texthook import hook, lc_detect
+from function.texthook import hook
 
 
 class HookTests(unittest.IsolatedAsyncioTestCase):
@@ -54,18 +54,6 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_initial_frame_does_not_drop_first_new_sentence(self) -> None:
         self.assertIn("First new sentence.",
                       await self.record_frames("", "First new sentence."))
-
-    def test_autostart_detection_only_requires_the_window(self) -> None:
-        window = MagicMock()
-        window.Exists.return_value = True
-        with patch("function.texthook.auto.UIAutomationInitializerInThread"), patch(
-            "function.texthook.auto.GetRootControl"
-        ) as root:
-            root.return_value.Control.return_value = window
-            self.assertTrue(lc_detect())
-            # Do not probe the text area: an existing initializing window must
-            # not be closed by sending the toggle shortcut again.
-            window.Control.assert_not_called()
 
     async def test_reads_and_com_cleanup_use_one_worker_and_flush_on_stop(self) -> None:
         calls = []

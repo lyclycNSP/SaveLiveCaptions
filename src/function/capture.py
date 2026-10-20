@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 import time
 
-from .config import MAX_SAVED_SENTENCES, MIN_LENGTH, SIMILARITY, STABLE_THRESHOLD
+from .config import MIN_LENGTH, SIMILARITY, STABLE_THRESHOLD
 from .dedup import Deduplicator
 from .save import save_replace_txt, save_txt
 from .sentences import is_incomplete_sentence, split_into_sentences
@@ -20,7 +20,6 @@ class CaptionSession:
     def __init__(self, filename: str) -> None:
         self.filename = filename
         self.active: list[PendingCaption] = []
-        self.recent: list[tuple[float, str]] = []
         self.deduper = Deduplicator()
 
     async def _write(self, item: PendingCaption) -> None:
@@ -28,8 +27,6 @@ class CaptionSession:
             return
         await save_txt(self.filename, (item.timestamp, item.text))
         item.saved = True
-        self.recent.append((item.timestamp, item.text))
-        self.recent = self.recent[-max(1, MAX_SAVED_SENTENCES):]
 
     async def observe(self, text: str, now: float | None = None) -> None:
         now = time.time() if now is None else now
