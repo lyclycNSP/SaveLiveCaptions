@@ -15,6 +15,7 @@ if src_path not in sys.path:
     sys.path.append(src_path)
 
 import main
+from function.texthook import lc_detect
 
 # Launch with “Win + Ctrl + L”
 def launch_lc():
@@ -27,7 +28,9 @@ def launch_lc():
         print(f"Error: {e}")
         
 if __name__ == "__main__":
-    launch_lc()
+    # The shortcut toggles the window; sending it when already open closes it.
+    if not lc_detect():
+        launch_lc()
     
     print("Launch Main.py...")
     

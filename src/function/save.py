@@ -1,94 +1,92 @@
-import sys
-import os
+"""UTF-8 caption storage; writes finish before session state is committed."""
+from pathlib import Path
 import asyncio
-import tkinter as tk
-from tkinter import filedialog
+import os
+import tempfile
 import time
-import aiofiles
-from difflib import SequenceMatcher
-import re
-from function.transformation import word_to_number
+from tkinter import filedialog
+from typing import TYPE_CHECKING
 
-file_handle=None
-saved_captions: list[tuple[float, str]] = [] # time, caption
+import aiofiles
+
+if TYPE_CHECKING:
+    import tkinter as tk
+
 save_dir = ""
 
-def normalize_sentence(s: str) -> str:
-    s = s.strip()
-    # space
-    s = re.sub(r'\s+', ' ', s)
-    # lower letter
-    s = s.lower()
-    # "twenty twenty six" -> "2026"
-    s = word_to_number(s)
-    # symbol
-    s = re.sub(r'\s+([.,!?])', r'\1', s)
-    return s
 
-def similarity_ratio(s1: str, s2: str) -> float:
-    """calculate the similarity"""
-    norm1 = normalize_sentence(s1)
-    norm2 = normalize_sentence(s2)
-    return SequenceMatcher(None, norm1, norm2).ratio()
-
-def choose_save_dir():
+def choose_save_dir(parent: "tk.Misc | None" = None) -> str:
     global save_dir
-    
-    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())  
-
     if not save_dir:
-        root = tk.Tk()
-        root.withdraw()  
         save_dir = filedialog.askdirectory(
-            title="choose direction",
-            initialdir=os.path.expanduser("~")  
-        )
-        root.destroy()  
+            parent=parent, title="选择字幕保存文件夹", initialdir=str(Path.home())
+        ) or str(Path.home() / "Documents" / "captions")
+    directory = Path(save_dir)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        save_dir = ""
+        raise
+    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    # Reserve a unique file rather than append to a session from the same second.
+    suffix = 0
+    while True:
+        name = f"{timestamp}_captions" + (f"_{suffix}" if suffix else "") + ".txt"
+        path = directory / name
+        try:
+            with path.open("x", encoding="utf-8"):
+                pass
+            return str(path)
+        except FileExistsError:
+            suffix += 1
+        except OSError:
+            save_dir = ""
+            raise
 
-        if not save_dir:
-            save_dir = os.path.expanduser("~/Documents/captions")
-            os.makedirs(save_dir, exist_ok=True)
-    
-    filename = os.path.join(save_dir, f"{timestamp}_captions.txt")
-    
-    return filename
 
-async def save_replace_txt(filename,old_caption: tuple[float, str], new_caption: tuple[float, str]):
-    ''' Replace old caption with new caption '''
-    t_old, cap_old = old_caption
-    _, cap_new = new_caption
-    t_formatted = time.strftime("%H:%M:%S", time.localtime(t_old))
-    
-    # read file and replace line
-    async with aiofiles.open(filename, "r", encoding="utf-8") as f:
-        lines = await f.readlines()
-    
-    for idx, line in enumerate(lines):
-        if t_formatted in line and cap_old in line:
-            lines[idx] = f"[{t_formatted}] {cap_new}\n"
-            print(f"[REPLACE] Replaced:\n  OLD: {cap_old}\n  NEW: {cap_new}")
-            break
-    
-    # write back to file
-    async with aiofiles.open(filename, "w", encoding="utf-8") as f:
-        await f.writelines(lines)
+def caption_line(caption: tuple[float, str]) -> str:
+    timestamp, text = caption
+    return f"[{time.strftime('%H:%M:%S', time.localtime(timestamp))}] {text}\n"
 
-async def save_txt(filename,new_caption: tuple[float, str]):
-    ''' Add new caption '''
 
-    global file_handle
-    if file_handle is None:
-        file_handle = await aiofiles.open(filename, "a+", encoding="utf-8")
-    
-    t, cap = new_caption
-    t_formatted = time.strftime("%H:%M:%S", time.localtime(t))
-    
-    # write file
-    async with aiofiles.open(filename, "a", encoding="utf-8") as f:
-        await f.write(f"[{t_formatted}] {cap}\n")
+async def save_replace_txt(
+    filename: str, old_caption: tuple[float, str], new_caption: tuple[float, str]
+) -> None:
+    await asyncio.to_thread(_replace_last_line, Path(filename), old_caption, new_caption)
 
-async def close_file():
-    global file_handle
-    if file_handle is not None:
-        await file_handle.close()
-        file_handle = None
+
+def _replace_last_line(
+    path: Path, old_caption: tuple[float, str], new_caption: tuple[float, str]
+) -> None:
+    # Stream to a sibling file and replace atomically. A failed rewrite leaves
+    # the original transcript intact, including on Windows.
+    temp_path: Path | None = None
+    try:
+        with path.open("r", encoding="utf-8") as source:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent, delete=False
+            ) as target:
+                temp_path = Path(target.name)
+                previous = source.readline()
+                for line in source:
+                    target.write(previous)
+                    previous = line
+                if previous != caption_line(old_caption):
+                    raise OSError("待更新的末行与字幕文件不一致；请勿在录制中修改该文件。")
+                target.write(caption_line(new_caption))
+                target.flush()
+                os.fsync(target.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
+async def save_txt(filename: str, new_caption: tuple[float, str]) -> None:
+    async with aiofiles.open(filename, "a", encoding="utf-8") as stream:
+        await stream.write(caption_line(new_caption))
+
+
+async def close_file() -> None:
+    # Each write owns its handle; there is no persistent second handle to close.
+    return

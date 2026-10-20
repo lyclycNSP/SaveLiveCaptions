@@ -1,6 +1,6 @@
 
 #define MyAppName "Save Live Captions(LC autostart)"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "LiveCaptionsHelper"
 #define MyAppURL "https://github.com/LiveCaptionsHelper/SaveLiveCaptions"
 #define MyAppExeName "SaveLiveCaptions_LCautostart_Folder.exe"

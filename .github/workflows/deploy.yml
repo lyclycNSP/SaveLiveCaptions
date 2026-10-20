@@ -44,6 +44,13 @@ jobs:
         
 #         Onedir
 #        pyinstaller --clean --onedir --windowed --icon=assets/SaveLC.ico --name SaveLiveCaptions_Folder src/main.py  
+
+    - name: Run regression tests
+      run: python -m unittest discover -s tests -v
+
+    - name: Package autostart folder
+      shell: pwsh
+      run: Compress-Archive -Path dist/SaveLiveCaptions_LCautostart_Folder -DestinationPath dist/SaveLiveCaptions_LCautostart_Folder.zip
         
     - name: Upload to Artifacts (for quick testing)
       uses: actions/upload-artifact@v4
@@ -72,16 +79,14 @@ jobs:
       with:
         files: |
           dist/SaveLiveCaptions_SingleFile.exe
-          dist/SaveLiveCaptions_LCautostart.exe
+          dist/SaveLiveCaptions_LCautostart_Folder.zip
+          installer_output/SaveLiveCaptions_Setup.exe
 #          dist/SaveLiveCaptions_Folder/
         tag_name: ${{ github.ref_name }}  
         name: Release ${{ github.ref_name }}
-        body: |
-          ## 新版本发布！
-          ## NEW Release
-          - 下载 Save Live Captions.exe 双击运行（无需安装 Python）。
-          - Download the exe to run the application.
-        draft: True
+        body_path: docs/releases/${{ github.ref_name }}.md
+        fail_on_unmatched_files: true
+        draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动授权
