@@ -120,7 +120,7 @@ class Dashboard:
         self.exit_event.clear()
         self.stopping = False
         self.stop_btn.configure(state=tk.NORMAL)
-        self.status.configure(text="● 正在录制", fg=BLUE)
+        self.status.configure(text="● 正在录制 · 保持亮屏", fg=BLUE)
         self.path_label.configure(text=Path(filename).name)
         self.hook_task = self.loop.create_task(self.capture(filename))
 

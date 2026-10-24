@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import gc
 from pathlib import Path
 import sys
 import tempfile
@@ -37,6 +38,11 @@ class DashboardTests(unittest.TestCase):
         except tk.TclError:
             pass
         self.loop.close()
+        # Tk widget callbacks form cycles. Collect the destroyed fixtures on
+        # their creating thread before later file-I/O workers can trigger GC.
+        self.app = None
+        self.root = None
+        gc.collect()
 
     def pump(self, predicate, timeout: float = 3) -> None:
         deadline = time.monotonic() + timeout

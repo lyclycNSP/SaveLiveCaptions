@@ -6,14 +6,17 @@ import uiautomation as auto
 
 from .capture import CaptionSession
 from .baseline import StartupBaseline
+from .power import RecordingPowerGuard
 
 
 class CaptionReader:
     def __init__(self) -> None:
         self.context: auto.UIAutomationInitializerInThread | None = None
         self.viewer: auto.Control | None = None
+        self.power = RecordingPowerGuard()
 
     def open(self) -> None:
+        self.power.acquire()
         self.context = auto.UIAutomationInitializerInThread()
         auto.SetGlobalSearchTimeout(0.5)
         window = auto.GetRootControl().Control(
@@ -37,9 +40,12 @@ class CaptionReader:
     def close(self) -> None:
         # Release COM-backed controls before uninitializing this worker.
         self.viewer = None
-        if self.context is not None:
-            self.context.Uninitialize()
-            self.context = None
+        try:
+            if self.context is not None:
+                self.context.Uninitialize()
+                self.context = None
+        finally:
+            self.power.release()
 
 
 async def hook(filename: str, exit_event: asyncio.Event) -> None:

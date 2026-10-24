@@ -1,13 +1,12 @@
 """UTF-8 caption storage; writes finish before session state is committed."""
 from pathlib import Path
 import asyncio
+import io
 import os
 import tempfile
 import time
 from tkinter import filedialog
-from typing import TYPE_CHECKING
-
-import aiofiles
+from typing import BinaryIO, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import tkinter as tk
@@ -49,39 +48,81 @@ def caption_line(caption: tuple[float, str]) -> str:
     return f"[{time.strftime('%H:%M:%S', time.localtime(timestamp))}] {text}\n"
 
 
-async def save_replace_txt(
-    filename: str, old_caption: tuple[float, str], new_caption: tuple[float, str]
-) -> None:
-    await asyncio.to_thread(_replace_last_line, Path(filename), old_caption, new_caption)
+class TranscriptStore:
+    """An immutable file prefix plus an atomically replaceable visible draft."""
+    def __init__(self, filename: str) -> None:
+        self.path = Path(filename)
+        self.prefix_bytes = 0
+        self.draft = b""
+
+    async def publish(
+        self, committed: list[tuple[float, str]], draft: list[tuple[float, str]]
+    ) -> None:
+        committed_bytes = "".join(map(caption_line, committed)).encode("utf-8")
+        draft_bytes = "".join(map(caption_line, draft)).encode("utf-8")
+        replacement = committed_bytes + draft_bytes
+        if replacement != self.draft:
+            writer = _append_draft if replacement.startswith(self.draft) else _replace_draft
+            await asyncio.to_thread(
+                writer, self.path, self.prefix_bytes, self.draft, replacement
+            )
+        # Commit metadata only after the replacement succeeds. Retain only the
+        # current visible draft in memory, never the whole recording.
+        self.prefix_bytes += len(committed_bytes)
+        self.draft = draft_bytes
 
 
-def _replace_last_line(
-    path: Path, old_caption: tuple[float, str], new_caption: tuple[float, str]
-) -> None:
-    # Stream to a sibling file and replace atomically. A failed rewrite leaves
-    # the original transcript intact, including on Windows.
-    temp_path: Path | None = None
+def _append_draft(path: Path, prefix_bytes: int, expected: bytes, replacement: bytes) -> None:
     try:
-        with path.open("r", encoding="utf-8") as source:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent, delete=False
-            ) as target:
+        stream = path.open("r+b")
+    except FileNotFoundError:
+        if prefix_bytes or expected:
+            raise
+        stream = path.open("x+b")
+    with stream:
+        if os.fstat(stream.fileno()).st_size != prefix_bytes + len(expected):
+            raise OSError("字幕文件长度与预期不符；请勿在录制中编辑输出文件。")
+        stream.seek(prefix_bytes)
+        if stream.read(len(expected) + 1) != expected or stream.tell() != prefix_bytes + len(expected):
+            raise OSError("字幕文件与预期不符；请勿在录制中编辑输出文件。")
+        old_size = stream.tell()
+        try:
+            stream.write(replacement[len(expected):])
+            stream.flush()
+            os.fsync(stream.fileno())
+        except OSError:
+            stream.seek(old_size)
+            stream.truncate()
+            stream.flush()
+            raise
+
+
+def _replace_draft(path: Path, prefix_bytes: int, expected: bytes, replacement: bytes) -> None:
+    temp_path: Path | None = None
+    source: BinaryIO
+    try:
+        try:
+            source = path.open("rb")
+        except FileNotFoundError:
+            if prefix_bytes or expected:
+                raise
+            source = io.BytesIO()
+        with source:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=path.parent, delete=False) as target:
                 temp_path = Path(target.name)
-                previous = source.readline()
-                for line in source:
-                    target.write(previous)
-                    previous = line
-                if previous != caption_line(old_caption):
-                    raise OSError("待更新的末行与字幕文件不一致；请勿在录制中修改该文件。")
-                target.write(caption_line(new_caption))
+                remaining = prefix_bytes
+                while remaining:
+                    chunk = source.read(min(remaining, 1024 * 1024))
+                    if not chunk:
+                        raise OSError("字幕文件的已确认正文被修改；请勿在录制中编辑输出文件。")
+                    target.write(chunk)
+                    remaining -= len(chunk)
+                if source.read(len(expected) + 1) != expected:
+                    raise OSError("字幕文件的草稿与预期不符；请勿在录制中编辑输出文件。")
+                target.write(replacement)
                 target.flush()
                 os.fsync(target.fileno())
         os.replace(temp_path, path)
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink()
-
-
-async def save_txt(filename: str, new_caption: tuple[float, str]) -> None:
-    async with aiofiles.open(filename, "a", encoding="utf-8") as stream:
-        await stream.write(caption_line(new_caption))
